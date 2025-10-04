@@ -28,16 +28,18 @@ cd dor
 ```
 bash setup.sh
 ```
-6. Run the script
+6. Run the script ( 1-full, 2-minimalist, 3-standard )
 ```
 python main.py
 ```
+```
+python main2.py
+```
+```
+python main3.py
+```
 7. Input your API key when prompted
-#
-# For updates
-```
-bash update.sh
-```
+
 # Info
 
 ## PS for Certain Indonesian mobile internet service provider

@@ -116,22 +116,6 @@ def submit_otp(api_key: str, contact: str, code: str):
         print(f"[Error submit_otp]: {e}")
         return None
 
-def save_tokens(tokens: dict, filename: str = "tokens.json"):
-    with open(filename, 'w') as f:
-        json.dump(tokens, f, indent=2, ensure_ascii=False)
-        
-def load_tokens(filename: str = "tokens.json") -> dict:
-    try:
-        with open(filename, 'r') as f:
-            tokens = json.load(f)
-            if not isinstance(tokens, dict) or "refresh_token" not in tokens or "id_token" not in tokens:
-                raise ValueError("Invalid token format in file")
-            return tokens
-            
-    except FileNotFoundError:
-        print(f"File {filename} not found. Returning empty tokens.")
-        return {}
-
 def get_new_token(refresh_token: str) -> str:
     url = SUBMIT_OTP_URL
 
@@ -253,6 +237,7 @@ def get_balance(api_key: str, id_token: str) -> dict:
     
     print("Fetching balance...")
     res = send_api_request(api_key, path, raw_payload, id_token, "POST")
+    # print(f"[GB-256]:\n{json.dumps(res, indent=2)}")
     
     if "data" in res:
         if "balance" in res["data"]:
@@ -261,42 +246,6 @@ def get_balance(api_key: str, id_token: str) -> dict:
         print("Error getting balance:", res.get("error", "Unknown error"))
         return None
     
-def get_quota(api_key: str, id_token: str) -> dict | None:
-    """
-    Mengambil kuota utama pengguna.
-    api_key  : API key user
-    id_token : token aktif user
-    return   : dict quota {'remaining', 'total', 'has_unlimited'} atau None jika gagal
-    """
-    path = "api/v8/packages/quota-summary"
-    
-    payload = {
-        "is_enterprise": False,
-        "lang": "en"
-    }
-    
-    print("Fetching quota summary...")
-    try:
-        res = send_api_request(api_key, path, payload, id_token, "POST")
-    except Exception as e:
-        print("Error sending API request:", e)
-        return None
-
-    if isinstance(res, dict) and "data" in res:
-        quota = res["data"].get("quota", {}).get("data")
-        if quota:
-            return {
-                "remaining": quota.get("remaining", 0),
-                "total": quota.get("total", 0),
-                "has_unlimited": quota.get("has_unlimited", False)
-            }
-        else:
-            print("Quota data not found in response.")
-            return None
-    else:
-        print("Error getting quota:", res.get("error", "Unknown error") if isinstance(res, dict) else res)
-        return None
-
 def get_family(
     api_key: str,
     tokens: dict,
@@ -330,6 +279,81 @@ def get_family(
     # print(json.dumps(res, indent=2))
     return res["data"]
 
+def get_family_v2(
+    api_key: str,
+    tokens: dict,
+    family_code: str,
+    is_enterprise: bool | None = None,
+    migration_type: str | None = None
+) -> dict:
+    print("Fetching package family...")
+    
+    is_enterprise_list = [
+        False,
+        True
+    ]
+
+    migration_type_list = [
+        "NONE",
+        "PRE_TO_PRIOH",
+        "PRIOH_TO_PRIO"
+    ]
+
+    if is_enterprise is not None:
+        is_enterprise_list = [is_enterprise]
+
+    if migration_type is not None:
+        migration_type_list = [migration_type]
+
+
+    path = "api/v8/xl-stores/options/list"
+    id_token = tokens.get("id_token")
+
+    family_data = None
+
+    for mt in migration_type_list:
+        if family_data is not None:
+            break
+
+        for ie in is_enterprise_list:
+            if family_data is not None:
+                break
+        
+            print(f"Trying is_enterprise={ie}, migration_type={mt}...")
+
+            payload_dict = {
+                "is_show_tagging_tab": True,
+                "is_dedicated_event": True,
+                "is_transaction_routine": False,
+                "migration_type": mt,
+                "package_family_code": family_code,
+                "is_autobuy": False,
+                "is_enterprise": ie,
+                "is_pdlp": True,
+                "referral_code": "",
+                "is_migration": False,
+                "lang": "en"
+            }
+        
+            res = send_api_request(api_key, path, payload_dict, id_token, "POST")
+            if res.get("status") != "SUCCESS":
+                print(f"Failed to get family {family_code}")
+                print(json.dumps(res, indent=2))
+                input("Press Enter to continue...")
+                return None
+            
+            family_name = res["data"]["package_family"].get("name", "")
+            if family_name != "":
+                family_data = res["data"]
+                print(f"Success with is_enterprise={ie}, migration_type={mt}. Family name: {family_name}")
+
+
+    if family_data is None:
+        print(f"Failed to get valid family data for {family_code}")
+        return None
+
+    return family_data
+
 def get_families(api_key: str, tokens: dict, package_category_code: str) -> dict:
     print("Fetching families...")
     path = "api/v8/xl-stores/families"
@@ -340,7 +364,7 @@ def get_families(api_key: str, tokens: dict, package_category_code: str) -> dict
         "package_category_code": package_category_code,
         "with_icon_url": True,
         "is_migration": False,
-        "lang": "id"
+        "lang": "en"
     }
     
     res = send_api_request(api_key, path, payload_dict, tokens["id_token"], "POST")
@@ -370,7 +394,7 @@ def get_package(
         "is_enterprise": False,
         "is_shareable": False,
         "is_migration": False,
-        "lang": "id",
+        "lang": "en",
         "package_option_code": package_option_code,
         "is_upsell_pdp": False,
         "package_variant_code": package_variant_code
@@ -530,7 +554,7 @@ def purchase_package(
         "payment_type": "PURCHASE",
         "is_enterprise": is_enterprise,
         "payment_target": payment_target,
-        "lang": "id",
+        "lang": "en",
         "is_referral": False,
         "token_confirmation": token_confirmation
     }
@@ -654,12 +678,12 @@ def get_package_details(
     api_key: str,
     tokens: dict,
     family_code: str,
-    variant_name: str,
+    variant_code: str,
     option_order: int,
-    is_enterprise: bool,
-    migration_type: str = "NONE"
+    is_enterprise: bool | None = None,
+    migration_type: str | None = None
 ) -> dict | None:
-    family_data = get_family(api_key, tokens, family_code, is_enterprise, migration_type)
+    family_data = get_family_v2(api_key, tokens, family_code, is_enterprise, migration_type)
     if not family_data:
         print(f"Gagal mengambil data family untuk {family_code}.")
         return None
@@ -669,23 +693,14 @@ def get_package_details(
     package_variants = family_data["package_variants"]
     option_code = None
     for variant in package_variants:
-
-        # if clean_text(variant["name"]) == variant_name:
-        #     selected_variant = variant
-            
-        #     package_options = selected_variant["package_options"]
-        #     for option in package_options:
-        #         if option["order"] == option_order:
-        #             selected_option = option
-        #             option_code = selected_option["package_option_code"]
-        #             break
-        package_options.extend(variant["package_options"])
-    
-    for option in package_options:
-        if option["order"] == option_order:
-            selected_option = option
-            option_code = selected_option["package_option_code"]
-            break
+        if variant["package_variant_code"] == variant_code:
+            selected_variant = variant
+            package_options = selected_variant["package_options"]
+            for option in package_options:
+                if option["order"] == option_order:
+                    selected_option = option
+                    option_code = selected_option["package_option_code"]
+                    break
 
     if option_code is None:
         print("Gagal menemukan opsi paket yang sesuai.")
